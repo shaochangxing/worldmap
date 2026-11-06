@@ -82,6 +82,13 @@ import kotlin.math.min
 
 private const val MAX_LAT = 89.0
 
+/**
+ * 拖动灵敏度：1x 时横滑一屏（屏幕宽度）转动的角度（度）。
+ * 约 220° ≈ 0.61 圈，转满 360° 需要约 1.64 屏宽；
+ * 高倍按 1/zoom 衰减（5x 时一屏约 44°），保持放大后可控。
+ */
+private const val DRAG_DEG_PER_SCREEN_AT_1X = 220.0
+
 /** 国家名锚点的最小可见深度：靠近地平线的点投影被极度压扁，标签会糊在一起。 */
 private const val LABEL_MIN_DEPTH = 0.30
 
@@ -141,8 +148,9 @@ fun GlobeScreen(
         selected?.let { SubRegionMap.highlightSetOf(it, countries) } ?: emptyList()
     }
 
-    fun rotateGlobe(dx: Float, dy: Float, radiusPx: Float) {
-        val degPerPx = 180.0 / (PI * radiusPx)
+    fun rotateGlobe(dx: Float, dy: Float, viewWidthPx: Float) {
+        val degPerPx = DRAG_DEG_PER_SCREEN_AT_1X /
+            (viewWidthPx.coerceAtLeast(1f) * zoom.coerceAtLeast(1f))
         lon = normalizeLon(lon - dx * degPerPx)
         lat = (lat + dy * degPerPx).coerceIn(-MAX_LAT, MAX_LAT)
     }
@@ -207,10 +215,9 @@ fun GlobeScreen(
                                 if (prevDist > 1f && curDist > 1f) {
                                     zoom = GlobeScale.clampZoom(zoom * (curDist / prevDist))
                                 }
-                                val radius = globeRadius(size.width.toFloat(), size.height.toFloat(), zoom).coerceAtLeast(1f)
                                 val centroid = (p0.position + p1.position) / 2f
                                 val prevCentroid = (p0.previousPosition + p1.previousPosition) / 2f
-                                rotateGlobe(centroid.x - prevCentroid.x, centroid.y - prevCentroid.y, radius)
+                                rotateGlobe(centroid.x - prevCentroid.x, centroid.y - prevCentroid.y, size.width.toFloat())
                                 pressed.forEach { it.consume() }
                                 nav = null
                             } else {
@@ -219,8 +226,7 @@ fun GlobeScreen(
                                 accumulated += delta
                                 if (!dragging && accumulated.getDistance() > viewConfiguration.touchSlop) dragging = true
                                 if (dragging) {
-                                    val radius = globeRadius(size.width.toFloat(), size.height.toFloat(), zoom).coerceAtLeast(1f)
-                                    rotateGlobe(delta.x, delta.y, radius)
+                                    rotateGlobe(delta.x, delta.y, size.width.toFloat())
                                     change.consume()
                                     nav = null
                                 }
@@ -297,42 +303,30 @@ fun GlobeScreen(
                 }
             }
 
-            // 国家名：面积优先、分级显示、矩形重叠剔除（先于城市名占据空间）
+            // 城市点与城市名共用一套可见性：先算出“本帧能显示名字”的城市集合，
+            // 名字被视口/重叠剔除的城市不再画点。绘制顺序仍是 点 → 国名 → 城市名。
             placedRects.clear()
-            drawnCountryLabels(
-                countriesByArea = countriesByArea,
-                cam = cam,
-                measurer = measurer,
-                palette = palette,
-                width = width,
-                height = height,
-                zoom = zoom,
-                placed = placedRects,
-            )
-
-            // 城市圆点：放大后显示非首都
-            val showAllCities = zoom >= 1.5f
-            for (city in cities) {
-                if (!city.isCapital && !showAllCities) continue
-                val depth = city.ux * cam.fx + city.uy * cam.fy + city.uz * cam.fz
-                if (depth < 0.05) continue
-                val point = cam.project(city.ux, city.uy, city.uz)
-                if (point.x < -10f || point.x > width + 10f || point.y < -10f || point.y > height + 10f) continue
-                drawCircle(
-                    color = if (city.isCapital) palette.capitalDot else palette.cityDot,
-                    radius = if (city.isCapital) 3f else 2f,
-                    center = Offset(point.x, point.y),
-                )
-            }
-
-            // 城市名：缩放阈值随倍率提高，避免 10x 下标签挤满屏幕；但档位越高允许画的条数越多
+            val acceptedCity = BooleanArray(cities.size)
+            val textPlacements = ArrayList<TextPlacement>(320)
             if (zoom >= 1.55f) {
+                // 国名先占位（面积优先），城市名在剩余空间里按 首都→非首都 的顺序占位
+                placeCountryLabels(
+                    countriesByArea = countriesByArea,
+                    cam = cam,
+                    measurer = measurer,
+                    palette = palette,
+                    width = width,
+                    height = height,
+                    zoom = zoom,
+                    placed = placedRects,
+                    out = textPlacements,
+                )
                 val cityLabelCap = when {
-                    zoom >= 6f -> 96
-                    zoom >= 3f -> 64
-                    else -> 42
+                    zoom >= 5f -> 600
+                    zoom >= 2f -> 180
+                    else -> 80
                 }
-                drawCityLabels(
+                val capitalsDrawn = placeCityLabels(
                     cities = cities,
                     cam = cam,
                     layouts = cityLabelLayouts,
@@ -344,8 +338,10 @@ fun GlobeScreen(
                     zoom = zoom,
                     capitalsOnly = true,
                     maxCount = cityLabelCap,
+                    accepted = acceptedCity,
+                    out = textPlacements,
                 )
-                drawCityLabels(
+                placeCityLabels(
                     cities = cities,
                     cam = cam,
                     layouts = cityLabelLayouts,
@@ -356,8 +352,22 @@ fun GlobeScreen(
                     labelColor = palette.label,
                     zoom = zoom,
                     capitalsOnly = false,
-                    maxCount = cityLabelCap,
+                    maxCount = (cityLabelCap - capitalsDrawn).coerceAtLeast(0),
+                    accepted = acceptedCity,
+                    out = textPlacements,
                 )
+            }
+
+            // 没有名字就不画点：所有档位只画本帧通过标签判定的城市。
+            // 1x 城市名配额为 0，因此 1x 也不会出现任何无名点。
+            for (i in cities.indices) {
+                if (!acceptedCity[i]) continue
+                drawCityDot(cities[i], cam, palette)
+            }
+
+            // 文字统一最后画：先国名、后城市名，保证都压在城市点之上
+            for (p in textPlacements) {
+                drawText(p.layout, color = p.color, topLeft = p.topLeft)
             }
 
             // 球体轮廓
@@ -473,11 +483,14 @@ fun GlobeScreen(
     }
 }
 
+/** 一次布局阶段产出的文字放置；统一在城市点之后绘制，保证文字永远压在点之上。 */
+private class TextPlacement(val layout: TextLayoutResult, val color: Color, val topLeft: Offset)
+
 /**
- * 画国家名标签：按面积从大到小尝试放置，被压缩的低优先级标签直接跳过。
- * 使用主题反相的光晕（shadow）保证在陆地与海洋上都能读清；字号按档位固定，不随缩放放大。
+ * 计算国家名标签的放置：按面积从大到小尝试，被压缩的低优先级标签直接跳过。
+ * 只做布局、不绘制，交由调用方在城市点之后统一绘制，保证文字压在城市点之上。
  */
-private fun DrawScope.drawnCountryLabels(
+private fun DrawScope.placeCountryLabels(
     countriesByArea: List<Country>,
     cam: GlobeCamera,
     measurer: androidx.compose.ui.text.TextMeasurer,
@@ -486,6 +499,7 @@ private fun DrawScope.drawnCountryLabels(
     height: Float,
     zoom: Float,
     placed: MutableList<Rect>,
+    out: MutableList<TextPlacement>,
 ) {
     val style = TextStyle(
         fontSize = CountryLabelLayout.fontSizeSp(zoom).sp,
@@ -517,13 +531,13 @@ private fun DrawScope.drawnCountryLabels(
     for (i in CountryLabelLayout.accept(boxes, blocked, viewport, limit)) {
         val layout = layouts[i]
         val box = boxes[i]
-        drawText(layout, topLeft = Offset(box.left, box.top))
+        out.add(TextPlacement(layout, palette.label, Offset(box.left, box.top)))
         placed.add(box)
     }
 }
 
-/** 画一批城市标签；[capitalsOnly] 为 true 时只画首都，否则只画非首都。 */
-private fun DrawScope.drawCityLabels(
+/** 计算一批城市标签的放置（不绘制），并把通过判定的城市索引写入 [accepted]。 */
+private fun DrawScope.placeCityLabels(
     cities: List<City>,
     cam: GlobeCamera,
     layouts: List<TextLayoutResult>,
@@ -535,13 +549,15 @@ private fun DrawScope.drawCityLabels(
     zoom: Float,
     capitalsOnly: Boolean,
     maxCount: Int,
-) {
+    accepted: BooleanArray,
+    out: MutableList<TextPlacement>,
+): Int {
     var count = 0
     for (i in cities.indices) {
         if (count >= maxCount) break
         val city = cities[i]
         if (city.isCapital != capitalsOnly) continue
-        if (!city.isCapital && zoom < 2.3f) continue
+        if (!city.isCapital && zoom < 2f) continue
         val depth = city.ux * cam.fx + city.uy * cam.fy + city.uz * cam.fz
         if (depth < minDepth) continue
         val point = cam.project(city.ux, city.uy, city.uz)
@@ -559,9 +575,24 @@ private fun DrawScope.drawCityLabels(
         }
         if (overlaps) continue
         placed.add(rect)
+        accepted[i] = true
         count++
-        drawText(layout, color = labelColor, topLeft = Offset(lx, ly))
+        out.add(TextPlacement(layout, labelColor, Offset(lx, ly)))
     }
+    return count
+}
+
+/** 画一个城市坐标点（仅用于已通过标签判定的城市）。 */
+private fun DrawScope.drawCityDot(city: City, cam: GlobeCamera, palette: com.sqz.worldmap.ui.theme.GlobePalette) {
+    val depth = city.ux * cam.fx + city.uy * cam.fy + city.uz * cam.fz
+    if (depth < 0.05) return
+    val point = cam.project(city.ux, city.uy, city.uz)
+    if (point.x < -10f || point.x > size.width + 10f || point.y < -10f || point.y > size.height + 10f) return
+    drawCircle(
+        color = if (city.isCapital) palette.capitalDot else palette.cityDot,
+        radius = if (city.isCapital) 3f else 2f,
+        center = Offset(point.x, point.y),
+    )
 }
 
 @Composable

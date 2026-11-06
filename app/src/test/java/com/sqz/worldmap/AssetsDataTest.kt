@@ -2,6 +2,7 @@ package com.sqz.worldmap
 
 import com.sqz.worldmap.data.Country
 import com.sqz.worldmap.data.WorldDataParser
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -17,7 +18,20 @@ class AssetsDataTest {
 
     private val countries: List<Country> by lazy { WorldDataParser.parseCountries(countriesJson) }
 
+    private val cityArray by lazy { JSONObject(citiesJson).getJSONArray("cities") }
+
     private fun pointCount(list: List<Country>): Int = list.sumOf { c -> c.rings.sumOf { it.size } }
+
+    private fun rawCityCounts(field: String, filter: (JSONObject) -> Boolean = { true }): Map<String, Int> {
+        val counts = HashMap<String, Int>()
+        for (i in 0 until cityArray.length()) {
+            val o = cityArray.getJSONObject(i)
+            if (!filter(o)) continue
+            val key = o.optString(field)
+            counts[key] = (counts[key] ?: 0) + 1
+        }
+        return counts
+    }
 
     @Test
     fun countriesAssetCoversNaturalEarth10m() {
@@ -125,7 +139,7 @@ class AssetsDataTest {
     @Test
     fun citiesAreParsedAndReasonable() {
         val cities = WorldDataParser.parseCities(citiesJson)
-        assertEquals(243, cities.size)
+        assertEquals(1299, cities.size)
         assertTrue("首都数量应为主", cities.count { it.isCapital } >= 190)
         for (city in cities) {
             assertTrue(city.nameZh.isNotBlank())
@@ -133,6 +147,79 @@ class AssetsDataTest {
             assertTrue(city.lon >= -180.0 && city.lon <= 180.0)
         }
         assertTrue(cities.any { it.nameEn == "Beijing" && it.countryIso == "CHN" })
+    }
+
+    @Test
+    fun cityCountsFollowCountryAndProvinceQuotas() {
+        val cities = WorldDataParser.parseCities(citiesJson)
+        assertEquals("中国大陆", 99, cities.count { it.countryIso == "CHN" })
+        assertEquals("香港", 1, cities.count { it.countryIso == "HKG" })
+        assertEquals("澳门", 1, cities.count { it.countryIso == "MAC" })
+        assertEquals("美国", 116, cities.count { it.countryIso == "USA" })
+        assertEquals("台湾（按既有归属规则单独成图）", 4, cities.count { it.countryIso == "TWN" })
+    }
+
+    @Test
+    fun chinaHasAllProvincialCapitals() {
+        val cities = WorldDataParser.parseCities(citiesJson)
+        val required = listOf(
+            "北京", "天津", "上海", "重庆", "石家庄", "太原", "呼和浩特", "沈阳", "长春", "哈尔滨",
+            "南京", "杭州", "合肥", "福州", "南昌", "济南", "郑州", "武汉", "长沙", "广州",
+            "南宁", "海口", "成都", "贵阳", "昆明", "拉萨", "西安", "兰州", "西宁", "银川",
+            "乌鲁木齐", "香港", "澳门",
+        )
+        for (name in required) {
+            assertTrue("缺少省级驻地：$name", cities.any { it.nameZh == name })
+        }
+    }
+
+    @Test
+    fun chinaEveryProvinceHasCapitalPlusTwoCities() {
+        val provinces = listOf(
+            "北京", "天津", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "上海", "江苏",
+            "浙江", "安徽", "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "广西",
+            "海南", "重庆", "四川", "贵州", "云南", "西藏", "陕西", "甘肃", "青海", "宁夏", "新疆",
+        )
+        val byProvince = rawCityCounts("p") { it.optString("cc") == "CHN" }
+        for (p in provinces) {
+            assertTrue("$p 城市数不足（省会 + 2 个）", (byProvince[p] ?: 0) >= 3)
+        }
+    }
+
+    @Test
+    fun usaEveryStateHasAtLeastTwoCities() {
+        val states = listOf(
+            "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
+            "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+            "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan",
+            "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada",
+            "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina",
+            "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island",
+            "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+            "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming",
+        )
+        val byState = rawCityCounts("p") { it.optString("cc") == "USA" }
+        for (s in states) {
+            assertTrue("$s 城市数不足 2", (byState[s] ?: 0) >= 2)
+        }
+    }
+
+    @Test
+    fun cityCoordinatesAreUniqueAfterRounding() {
+        val cities = WorldDataParser.parseCities(citiesJson)
+        val keys = cities.map { it.lat to it.lon }
+        assertEquals("城市坐标（0.01°）不应重复", cities.size, keys.toSet().size)
+    }
+
+    @Test
+    fun everyCountryWithSettlementHasACity() {
+        // 无常住居民/仅军事或科研设施的地区没有城市点，其余国家/属地至少 1 个（微型国即首都）
+        val noSettlement = setOf("ATA", "BRT", "IOT", "ATF", "USG", "HMD", "KAS", "SPI", "CNM")
+        val cityIso = WorldDataParser.parseCities(citiesJson).map { it.countryIso }.toSet()
+        for (c in countries) {
+            if (c.iso in noSettlement) continue
+            assertTrue("${c.nameZh}（${c.iso}）没有城市", c.iso in cityIso)
+        }
     }
 
     @Test

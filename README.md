@@ -33,7 +33,7 @@ Windows 下用 `gradlew.bat`。生成包位于 `app/build/outputs/apk/`。
 
 ## 数据来源与许可
 
-国家边界与城市数据来自 [Natural Earth](https://www.naturalearthdata.com/)（1:10m 国家边界、1:110m 城市点），属于公有领域（Public Domain），可自由使用。应用完全离线，不联网、不收集任何数据。
+国家边界与城市数据来自 [Natural Earth](https://www.naturalearthdata.com/)（1:10m 国家边界与城市点），属于公有领域（Public Domain），可自由使用。应用完全离线，不联网、不收集任何数据。
 
 ## 已知限制
 
