@@ -1,0 +1,25 @@
+# Built application files
+/build
+/app/build
+
+# Local config
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# Gradle
+/.gradle
+/.kotlin
+
+# IDE (machine specific)
+/.idea
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp / verification artifacts
+/temp
+*.hprof
