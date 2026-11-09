@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import com.sqz.worldmap.data.City
 import com.sqz.worldmap.data.Country
 import com.sqz.worldmap.data.HistoryEntry
+import com.sqz.worldmap.data.Ring
 import com.sqz.worldmap.data.SearchHistoryRepository
 import com.sqz.worldmap.data.SubRegionMap
 import com.sqz.worldmap.globe.CountryLabelLayout
@@ -71,6 +72,7 @@ import com.sqz.worldmap.globe.GlobeCamera
 import com.sqz.worldmap.globe.GlobeHitTest
 import com.sqz.worldmap.globe.GlobePathBuilder
 import com.sqz.worldmap.globe.GlobeScale
+import com.sqz.worldmap.globe.ProvincePathBuilder
 import com.sqz.worldmap.globe.landColorIndex
 import com.sqz.worldmap.ui.theme.globePalette
 import kotlinx.coroutines.launch
@@ -91,6 +93,9 @@ private const val DRAG_DEG_PER_SCREEN_AT_1X = 220.0
 
 /** 国家名锚点的最小可见深度：靠近地平线的点投影被极度压扁，标签会糊在一起。 */
 private const val LABEL_MIN_DEPTH = 0.30
+
+/** 省界出现的最小倍率：全球/洲际视野（1x~2x）不画，3x 起 0.5 倍区间内渐显。 */
+private const val PROVINCE_MIN_ZOOM = 3f
 
 private data class NavRequest(val lat: Double, val lon: Double, val zoom: Float)
 
@@ -114,6 +119,7 @@ private fun cameraFor(width: Float, height: Float, lat: Double, lon: Double, zoo
 fun GlobeScreen(
     countries: List<Country>,
     cities: List<City>,
+    provinceArcs: List<Ring>,
     historyRepository: SearchHistoryRepository,
 ) {
     var lat by remember { mutableStateOf(12.0) }
@@ -139,6 +145,9 @@ fun GlobeScreen(
 
     // 每国一个 Path，对象池复用（每帧只 rewind + 重填，不再分配）
     val pathPool = remember(countries) { Array(countries.size) { Path() } }
+    // 省界弧同样一弧一个 Path，池化复用
+    val provincePaths = remember(provinceArcs) { Array(provinceArcs.size) { Path() } }
+    val provinceBuilder = remember { ProvincePathBuilder() }
     val highlightPaths = remember { Array(6) { Path() } }
     val visibleIdx = remember { ArrayList<Int>(256) }
     val placedRects = remember { ArrayList<Rect>(200) }
@@ -300,6 +309,23 @@ fun GlobeScreen(
                 val hlStroke = 2.2f.dp.toPx()
                 for (i in 0 until used) {
                     drawPath(highlightPaths[i], palette.selectedStroke, style = Stroke(width = hlStroke))
+                }
+            }
+
+            // 中国省级界线：只画省际共享的内部边界（海岸/国界边在预处理阶段已剔除，
+            // 所以不会与国界重复描边，也不会在台海多出一层线）。
+            // 3x 起渐显；线宽约为国界的 0.62 倍、半透明偏冷色，与国界区分。
+            if (zoom >= PROVINCE_MIN_ZOOM && provinceArcs.isNotEmpty()) {
+                val fade = ((zoom - PROVINCE_MIN_ZOOM) / 0.5f).coerceIn(0f, 1f)
+                val stroke = Stroke(width = GlobeScale.provinceWidthDp(zoom).dp.toPx())
+                val color = palette.provinceBorder.copy(alpha = palette.provinceBorder.alpha * fade)
+                for (i in provinceArcs.indices) {
+                    val arc = provinceArcs[i]
+                    // 包围球剔除：整条弧在球背面时不用投影
+                    if (arc.centerX * cam.fx + arc.centerY * cam.fy + arc.centerZ * cam.fz < arc.capThreshold) continue
+                    if (provinceBuilder.buildInto(arc, cam, provincePaths[i])) {
+                        drawPath(provincePaths[i], color, style = stroke)
+                    }
                 }
             }
 

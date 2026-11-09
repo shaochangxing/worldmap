@@ -54,6 +54,8 @@ data class GlobePalette(
     val land: List<Color>,
     /** 国界描边颜色（与陆地填充有足够对比）。 */
     val border: Color,
+    /** 中国省级界线颜色：比国界更细、更透明，且色相偏冷，能与国界区分。 */
+    val provinceBorder: Color,
     val selectedFill: Color,
     val selectedStroke: Color,
     val cityDot: Color,
@@ -79,6 +81,7 @@ val LightGlobePalette = GlobePalette(
         Color(0xFFCFC5B0),
     ),
     border = Color(0xFF46564C),
+    provinceBorder = Color(0x9E4E6B7E),
     selectedFill = Color(0x73E9A33D),
     selectedStroke = Color(0xFFB4771B),
     cityDot = Color(0xFF5C6B63),
@@ -103,6 +106,7 @@ val DarkGlobePalette = GlobePalette(
         Color(0xFF5A6C5E),
     ),
     border = Color(0xFF9DBBAD),
+    provinceBorder = Color(0x9E8FA9B0),
     selectedFill = Color(0x8CF4C25B),
     selectedStroke = Color(0xFFFFD166),
     cityDot = Color(0xFFCBD8D1),

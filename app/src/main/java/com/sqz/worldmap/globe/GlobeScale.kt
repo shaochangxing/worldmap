@@ -32,4 +32,7 @@ object GlobeScale {
         span >= 1.0 -> 5.0f
         else -> 5.5f
     }
+
+    /** 省界描边宽度：约为国界的 0.62 倍，随缩放的变化规律与国界一致（连续、不跳变）。 */
+    fun provinceWidthDp(zoom: Float): Float = borderWidthDp(zoom) * 0.62f
 }
