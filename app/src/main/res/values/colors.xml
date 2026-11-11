@@ -1,3 +1,5 @@
 <resources>
     <color name="globe_bg">#FFF7FBF7</color>
+    <!-- 桌面图标背景层：取素材地球仪的黄色底 -->
+    <color name="ic_launcher_background">#FFD630</color>
 </resources>
